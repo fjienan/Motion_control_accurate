@@ -15,9 +15,11 @@ motion_action_node:
     position_tolerance: 0.015
 
     max_linear_speed: 0.8
-    max_angular_speed: 1.5
+    max_yaw_angular_speed: 1.5
+    max_xy_yaw_angular_speed: 0.4
     min_linear_speed: 0.15
-    min_angular_speed: 0.2
+    min_yaw_angular_speed: 0.2
+    min_xy_yaw_angular_speed: 0.0
     integral_limit: 0.5
 
     yaw_pid:

@@ -162,9 +162,11 @@ class MotionActionNode(Node):
         self.declare_parameter('yaw_tolerance_deg', 1.0)
         self.declare_parameter('position_tolerance', 0.03)
         self.declare_parameter('max_linear_speed', 0.25)
-        self.declare_parameter('max_angular_speed', 0.5)
+        self.declare_parameter('max_yaw_angular_speed', 0.5)
+        self.declare_parameter('max_xy_yaw_angular_speed', 0.3)
         self.declare_parameter('min_linear_speed', 0.2)
-        self.declare_parameter('min_angular_speed', 0.2)
+        self.declare_parameter('min_yaw_angular_speed', 0.2)
+        self.declare_parameter('min_xy_yaw_angular_speed', 0.0)
         self.declare_parameter('integral_limit', 0.5)
         self.declare_parameter('yaw_pid.kp', 1.2)
         self.declare_parameter('yaw_pid.ki', 0.0)
@@ -205,12 +207,16 @@ class MotionActionNode(Node):
             'position_tolerance').value)
         self.max_linear_speed = float(self.get_parameter(
             'max_linear_speed').value)
-        self.max_angular_speed = float(self.get_parameter(
-            'max_angular_speed').value)
+        self.max_yaw_angular_speed = float(self.get_parameter(
+            'max_yaw_angular_speed').value)
+        self.max_xy_yaw_angular_speed = float(self.get_parameter(
+            'max_xy_yaw_angular_speed').value)
         self.min_linear_speed = float(self.get_parameter(
             'min_linear_speed').value)
-        self.min_angular_speed = float(self.get_parameter(
-            'min_angular_speed').value)
+        self.min_yaw_angular_speed = float(self.get_parameter(
+            'min_yaw_angular_speed').value)
+        self.min_xy_yaw_angular_speed = float(self.get_parameter(
+            'min_xy_yaw_angular_speed').value)
         self.integral_limit = float(self.get_parameter(
             'integral_limit').value)
 
@@ -295,11 +301,11 @@ class MotionActionNode(Node):
                 return self._finish_result(goal, result)
 
             cmd_wz = yaw_pid.update(yaw_error, dt)
-            cmd_wz = apply_min_output(cmd_wz, self.min_angular_speed)
+            cmd_wz = apply_min_output(cmd_wz, self.min_yaw_angular_speed)
             cmd_wz = clamp(
                 cmd_wz,
-                -self.max_angular_speed,
-                self.max_angular_speed,
+                -self.max_yaw_angular_speed,
+                self.max_yaw_angular_speed,
             )
             self._publish_velocity(0.0, 0.0, cmd_wz)
             self._publish_feedback(
@@ -371,11 +377,14 @@ class MotionActionNode(Node):
                 self.max_linear_speed,
             )
             cmd_wz = xy_yaw_pid.update(yaw_error, dt)
-            cmd_wz = apply_min_output(cmd_wz, self.min_angular_speed)
+            cmd_wz = apply_min_output(
+                cmd_wz,
+                self.min_xy_yaw_angular_speed,
+            )
             cmd_wz = clamp(
                 cmd_wz,
-                -self.max_angular_speed,
-                self.max_angular_speed,
+                -self.max_xy_yaw_angular_speed,
+                self.max_xy_yaw_angular_speed,
             )
 
             self._publish_velocity(cmd_vx, cmd_vy, cmd_wz)
