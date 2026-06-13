@@ -8,8 +8,6 @@ motion_action_node:
     xy_timeout_sec: 10.0
     brake_duration_sec: 0.3
     brake_frequency_hz: 50.0
-    enable_debug_topics: true
-    debug_topic_prefix: /move_to_pose/debug
     enable_debug_plot_files: true
     debug_output_dir: output/pid_debug
 

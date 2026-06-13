@@ -11,7 +11,7 @@ from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
-from std_msgs.msg import Float32MultiArray, Float64
+from std_msgs.msg import Float32MultiArray
 
 
 ACTION_NAME = 'move_to_pose'
@@ -119,7 +119,6 @@ class MotionActionNode(Node):
 
         self._declare_parameters()
         self._load_parameters()
-        self.debug_publishers = {}
         self.debug_samples = []
         self.debug_record_start_time = None
 
@@ -128,8 +127,6 @@ class MotionActionNode(Node):
             self.velocity_topic,
             10,
         )
-        if self.enable_debug_topics:
-            self._create_debug_publishers()
         self.relocation_sub = self.create_subscription(
             PoseStamped,
             self.relocation_topic,
@@ -160,8 +157,6 @@ class MotionActionNode(Node):
         self.declare_parameter('xy_timeout_sec', 5.0)
         self.declare_parameter('brake_duration_sec', 0.3)
         self.declare_parameter('brake_frequency_hz', 50.0)
-        self.declare_parameter('enable_debug_topics', True)
-        self.declare_parameter('debug_topic_prefix', '/move_to_pose/debug')
         self.declare_parameter('enable_debug_plot_files', True)
         self.declare_parameter('debug_output_dir', 'output/pid_debug')
         self.declare_parameter('yaw_tolerance_deg', 1.0)
@@ -200,10 +195,6 @@ class MotionActionNode(Node):
             'brake_duration_sec').value)
         self.brake_frequency_hz = float(self.get_parameter(
             'brake_frequency_hz').value)
-        self.enable_debug_topics = bool(self.get_parameter(
-            'enable_debug_topics').value)
-        self.debug_topic_prefix = self.get_parameter(
-            'debug_topic_prefix').value.rstrip('/')
         self.enable_debug_plot_files = bool(self.get_parameter(
             'enable_debug_plot_files').value)
         self.debug_output_dir = self.get_parameter(
@@ -464,7 +455,7 @@ class MotionActionNode(Node):
         feedback.cmd_vy = cmd_vy
         feedback.cmd_wz = cmd_wz
         goal_handle.publish_feedback(feedback)
-        self._publish_debug(
+        self._record_debug_values(
             phase,
             pose,
             goal,
@@ -477,33 +468,7 @@ class MotionActionNode(Node):
             cmd_wz,
         )
 
-    def _create_debug_publishers(self):
-        names = [
-            'phase_id',
-            'current_x',
-            'current_y',
-            'current_yaw_deg',
-            'target_x',
-            'target_y',
-            'target_yaw_deg',
-            'yaw_error_deg',
-            'distance_error',
-            'error_x_body',
-            'error_y_body',
-            'cmd_vx',
-            'cmd_vy',
-            'cmd_wz',
-            'cmd_linear_speed',
-        ]
-        for name in names:
-            topic = f'{self.debug_topic_prefix}/{name}'
-            self.debug_publishers[name] = self.create_publisher(
-                Float64,
-                topic,
-                10,
-            )
-
-    def _publish_debug(
+    def _record_debug_values(
         self,
         phase,
         pose,
@@ -539,13 +504,6 @@ class MotionActionNode(Node):
             'cmd_linear_speed': math.hypot(cmd_vx, cmd_vy),
         }
         self._record_debug_sample(values)
-        if not self.enable_debug_topics:
-            return
-
-        for name, value in values.items():
-            msg = Float64()
-            msg.data = float(value)
-            self.debug_publishers[name].publish(msg)
 
     def _start_debug_recording(self):
         self.debug_samples = []
