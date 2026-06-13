@@ -14,7 +14,7 @@ motion_action_node:
     yaw_tolerance_deg: 1.0
     position_tolerance: 0.015
 
-    max_linear_speed: 0.8
+    max_linear_speed: 1.5
     max_yaw_angular_speed: 1.5
     max_xy_yaw_angular_speed: 0.4
     min_linear_speed: 0.15
@@ -27,14 +27,14 @@ motion_action_node:
       ki: 0.2
       kd: 0.05
     xy_yaw_pid:
-      kp: 0.6
+      kp: 1.0
       ki: 0.0
       kd: 0.0
     x_pid:
-      kp: 0.8
+      kp: 5.0
       ki: 0.01
       kd: 0.1
     y_pid:
-      kp: 0.8
+      kp: 5.0
       ki: 0.01
       kd: 0.1
