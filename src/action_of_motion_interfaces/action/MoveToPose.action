@@ -1,0 +1,19 @@
+float64 x
+float64 y
+float64 yaw_deg
+---
+bool success
+string message
+---
+string phase
+float64 current_x
+float64 current_y
+float64 current_yaw_deg
+float64 target_x
+float64 target_y
+float64 target_yaw_deg
+float64 yaw_error_deg
+float64 distance_error
+float64 cmd_vx
+float64 cmd_vy
+float64 cmd_wz
