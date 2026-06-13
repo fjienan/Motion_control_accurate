@@ -73,6 +73,15 @@ def apply_min_output(value, minimum):
     return value
 
 
+def apply_min_vector_output(x_value, y_value, minimum):
+    minimum = abs(minimum)
+    norm = math.hypot(x_value, y_value)
+    if minimum <= 0.0 or norm == 0.0 or norm >= minimum:
+        return x_value, y_value
+    scale = minimum / norm
+    return x_value * scale, y_value * scale
+
+
 def normalize_angle(angle_rad):
     return math.atan2(math.sin(angle_rad), math.cos(angle_rad))
 
@@ -142,12 +151,14 @@ class MotionActionNode(Node):
         self.declare_parameter('initial_pose_timeout_sec', 2.0)
         self.declare_parameter('yaw_timeout_sec', 5.0)
         self.declare_parameter('xy_timeout_sec', 5.0)
+        self.declare_parameter('brake_duration_sec', 0.3)
+        self.declare_parameter('brake_frequency_hz', 50.0)
         self.declare_parameter('yaw_tolerance_deg', 1.0)
         self.declare_parameter('position_tolerance', 0.03)
         self.declare_parameter('max_linear_speed', 0.25)
         self.declare_parameter('max_angular_speed', 0.5)
-        self.declare_parameter('min_linear_speed', 0.0)
-        self.declare_parameter('min_angular_speed', 0.0)
+        self.declare_parameter('min_linear_speed', 0.2)
+        self.declare_parameter('min_angular_speed', 0.2)
         self.declare_parameter('integral_limit', 0.5)
         self.declare_parameter('yaw_pid.kp', 1.2)
         self.declare_parameter('yaw_pid.ki', 0.0)
@@ -171,6 +182,10 @@ class MotionActionNode(Node):
             'yaw_timeout_sec').value)
         self.xy_timeout_sec = float(self.get_parameter(
             'xy_timeout_sec').value)
+        self.brake_duration_sec = float(self.get_parameter(
+            'brake_duration_sec').value)
+        self.brake_frequency_hz = float(self.get_parameter(
+            'brake_frequency_hz').value)
         self.yaw_tolerance_rad = math.radians(float(self.get_parameter(
             'yaw_tolerance_deg').value))
         self.position_tolerance = float(self.get_parameter(
@@ -234,7 +249,7 @@ class MotionActionNode(Node):
             result.success = False
             result.message = 'Timed out waiting for relocation pose'
             goal_handle.abort()
-            self._publish_stop()
+            self._brake()
             return result
 
         yaw_start_time = time.monotonic()
@@ -244,7 +259,7 @@ class MotionActionNode(Node):
                 goal_handle.canceled()
                 result.success = False
                 result.message = 'Goal canceled during yaw phase'
-                self._publish_stop()
+                self._brake()
                 return result
 
             now = time.monotonic()
@@ -261,7 +276,7 @@ class MotionActionNode(Node):
                 result.success = False
                 result.message = 'Yaw phase timed out'
                 goal_handle.abort()
-                self._publish_stop()
+                self._brake()
                 return result
 
             cmd_wz = yaw_pid.update(yaw_error, dt)
@@ -295,7 +310,7 @@ class MotionActionNode(Node):
                 goal_handle.canceled()
                 result.success = False
                 result.message = 'Goal canceled during xy phase'
-                self._publish_stop()
+                self._brake()
                 return result
 
             now = time.monotonic()
@@ -311,14 +326,14 @@ class MotionActionNode(Node):
                 result.success = True
                 result.message = 'Goal reached'
                 goal_handle.succeed()
-                self._publish_stop()
+                self._brake()
                 return result
 
             if now - xy_start_time > self.xy_timeout_sec:
                 result.success = False
                 result.message = 'XY phase timed out'
                 goal_handle.abort()
-                self._publish_stop()
+                self._brake()
                 return result
 
             error_x_body, error_y_body = map_error_to_body(
@@ -328,8 +343,11 @@ class MotionActionNode(Node):
             )
             cmd_vx = x_pid.update(error_x_body, dt)
             cmd_vy = y_pid.update(error_y_body, dt)
-            cmd_vx = apply_min_output(cmd_vx, self.min_linear_speed)
-            cmd_vy = apply_min_output(cmd_vy, self.min_linear_speed)
+            cmd_vx, cmd_vy = apply_min_vector_output(
+                cmd_vx,
+                cmd_vy,
+                self.min_linear_speed,
+            )
             cmd_vx, cmd_vy = limit_vector(
                 cmd_vx,
                 cmd_vy,
@@ -360,7 +378,7 @@ class MotionActionNode(Node):
         result.success = False
         result.message = 'ROS shutdown during goal execution'
         goal_handle.abort()
-        self._publish_stop()
+        self._brake()
         return result
 
     def _wait_for_pose(self, goal_handle, goal, period):
@@ -368,7 +386,7 @@ class MotionActionNode(Node):
         while rclpy.ok() and self.latest_pose is None:
             if goal_handle.is_cancel_requested:
                 goal_handle.canceled()
-                self._publish_stop()
+                self._brake()
                 return 'canceled'
             if time.monotonic() - start_time > self.initial_pose_timeout_sec:
                 return 'timeout'
@@ -425,6 +443,14 @@ class MotionActionNode(Node):
 
     def _publish_stop(self):
         self._publish_velocity(0.0, 0.0, 0.0)
+
+    def _brake(self):
+        period = 1.0 / max(self.brake_frequency_hz, 1.0)
+        end_time = time.monotonic() + max(self.brake_duration_sec, 0.0)
+        self._publish_stop()
+        while time.monotonic() < end_time:
+            self._publish_stop()
+            time.sleep(period)
 
 
 def main(args=None):
