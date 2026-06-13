@@ -41,3 +41,9 @@ ros2 launch action_of_motion motion_action.launch.py \
 ```bash
 ./src/action_of_motion/scripts/send_move_goal.sh 1.0 0.5 90.0
 ```
+
+打开 PID 调试曲线：
+
+```bash
+./src/action_of_motion/scripts/plot_pid_debug.sh
+```

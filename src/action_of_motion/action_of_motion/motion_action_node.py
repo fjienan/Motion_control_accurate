@@ -9,7 +9,7 @@ from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
-from std_msgs.msg import Float32MultiArray
+from std_msgs.msg import Float32MultiArray, Float64
 
 
 ACTION_NAME = 'move_to_pose'
@@ -117,12 +117,15 @@ class MotionActionNode(Node):
 
         self._declare_parameters()
         self._load_parameters()
+        self.debug_publishers = {}
 
         self.velocity_pub = self.create_publisher(
             Float32MultiArray,
             self.velocity_topic,
             10,
         )
+        if self.enable_debug_topics:
+            self._create_debug_publishers()
         self.relocation_sub = self.create_subscription(
             PoseStamped,
             self.relocation_topic,
@@ -153,6 +156,8 @@ class MotionActionNode(Node):
         self.declare_parameter('xy_timeout_sec', 5.0)
         self.declare_parameter('brake_duration_sec', 0.3)
         self.declare_parameter('brake_frequency_hz', 50.0)
+        self.declare_parameter('enable_debug_topics', True)
+        self.declare_parameter('debug_topic_prefix', '/move_to_pose/debug')
         self.declare_parameter('yaw_tolerance_deg', 1.0)
         self.declare_parameter('position_tolerance', 0.03)
         self.declare_parameter('max_linear_speed', 0.25)
@@ -163,6 +168,9 @@ class MotionActionNode(Node):
         self.declare_parameter('yaw_pid.kp', 1.2)
         self.declare_parameter('yaw_pid.ki', 0.0)
         self.declare_parameter('yaw_pid.kd', 0.05)
+        self.declare_parameter('xy_yaw_pid.kp', 0.6)
+        self.declare_parameter('xy_yaw_pid.ki', 0.0)
+        self.declare_parameter('xy_yaw_pid.kd', 0.0)
         self.declare_parameter('x_pid.kp', 0.8)
         self.declare_parameter('x_pid.ki', 0.0)
         self.declare_parameter('x_pid.kd', 0.02)
@@ -186,6 +194,10 @@ class MotionActionNode(Node):
             'brake_duration_sec').value)
         self.brake_frequency_hz = float(self.get_parameter(
             'brake_frequency_hz').value)
+        self.enable_debug_topics = bool(self.get_parameter(
+            'enable_debug_topics').value)
+        self.debug_topic_prefix = self.get_parameter(
+            'debug_topic_prefix').value.rstrip('/')
         self.yaw_tolerance_rad = math.radians(float(self.get_parameter(
             'yaw_tolerance_deg').value))
         self.position_tolerance = float(self.get_parameter(
@@ -235,6 +247,7 @@ class MotionActionNode(Node):
         result = MoveToPose.Result()
 
         yaw_pid = self._make_pid('yaw_pid')
+        xy_yaw_pid = self._make_pid('xy_yaw_pid')
         x_pid = self._make_pid('x_pid')
         y_pid = self._make_pid('y_pid')
         target_yaw_rad = math.radians(goal.yaw_deg)
@@ -296,11 +309,13 @@ class MotionActionNode(Node):
                 self._distance_error(goal, pose),
                 0.0,
                 0.0,
+                0.0,
+                0.0,
                 cmd_wz,
             )
             time.sleep(period)
 
-        yaw_pid.reset()
+        xy_yaw_pid.reset()
         x_pid.reset()
         y_pid.reset()
         xy_start_time = time.monotonic()
@@ -353,7 +368,7 @@ class MotionActionNode(Node):
                 cmd_vy,
                 self.max_linear_speed,
             )
-            cmd_wz = yaw_pid.update(yaw_error, dt)
+            cmd_wz = xy_yaw_pid.update(yaw_error, dt)
             cmd_wz = apply_min_output(cmd_wz, self.min_angular_speed)
             cmd_wz = clamp(
                 cmd_wz,
@@ -369,6 +384,8 @@ class MotionActionNode(Node):
                 PHASE_XY,
                 yaw_error,
                 distance_error,
+                error_x_body,
+                error_y_body,
                 cmd_vx,
                 cmd_vy,
                 cmd_wz,
@@ -400,6 +417,8 @@ class MotionActionNode(Node):
                 0.0,
                 0.0,
                 0.0,
+                0.0,
+                0.0,
             )
             time.sleep(period)
         if self.latest_pose is None:
@@ -414,6 +433,8 @@ class MotionActionNode(Node):
         phase,
         yaw_error_rad,
         distance_error,
+        error_x_body,
+        error_y_body,
         cmd_vx,
         cmd_vy,
         cmd_wz,
@@ -432,6 +453,87 @@ class MotionActionNode(Node):
         feedback.cmd_vy = cmd_vy
         feedback.cmd_wz = cmd_wz
         goal_handle.publish_feedback(feedback)
+        self._publish_debug(
+            phase,
+            pose,
+            goal,
+            yaw_error_rad,
+            distance_error,
+            error_x_body,
+            error_y_body,
+            cmd_vx,
+            cmd_vy,
+            cmd_wz,
+        )
+
+    def _create_debug_publishers(self):
+        names = [
+            'phase_id',
+            'current_x',
+            'current_y',
+            'current_yaw_deg',
+            'target_x',
+            'target_y',
+            'target_yaw_deg',
+            'yaw_error_deg',
+            'distance_error',
+            'error_x_body',
+            'error_y_body',
+            'cmd_vx',
+            'cmd_vy',
+            'cmd_wz',
+            'cmd_linear_speed',
+        ]
+        for name in names:
+            topic = f'{self.debug_topic_prefix}/{name}'
+            self.debug_publishers[name] = self.create_publisher(
+                Float64,
+                topic,
+                10,
+            )
+
+    def _publish_debug(
+        self,
+        phase,
+        pose,
+        goal,
+        yaw_error_rad,
+        distance_error,
+        error_x_body,
+        error_y_body,
+        cmd_vx,
+        cmd_vy,
+        cmd_wz,
+    ):
+        if not self.enable_debug_topics:
+            return
+
+        phase_ids = {
+            PHASE_WAITING_FOR_POSE: 0.0,
+            PHASE_YAW: 1.0,
+            PHASE_XY: 2.0,
+        }
+        values = {
+            'phase_id': phase_ids.get(phase, -1.0),
+            'current_x': pose.x,
+            'current_y': pose.y,
+            'current_yaw_deg': math.degrees(pose.yaw_rad),
+            'target_x': goal.x,
+            'target_y': goal.y,
+            'target_yaw_deg': goal.yaw_deg,
+            'yaw_error_deg': math.degrees(yaw_error_rad),
+            'distance_error': distance_error,
+            'error_x_body': error_x_body,
+            'error_y_body': error_y_body,
+            'cmd_vx': cmd_vx,
+            'cmd_vy': cmd_vy,
+            'cmd_wz': cmd_wz,
+            'cmd_linear_speed': math.hypot(cmd_vx, cmd_vy),
+        }
+        for name, value in values.items():
+            msg = Float64()
+            msg.data = float(value)
+            self.debug_publishers[name].publish(msg)
 
     def _distance_error(self, goal, pose):
         return math.hypot(goal.x - pose.x, goal.y - pose.y)

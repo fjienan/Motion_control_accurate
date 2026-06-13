@@ -4,29 +4,35 @@ motion_action_node:
     velocity_topic: /t0x0101_pid
     control_frequency_hz: 20.0
     initial_pose_timeout_sec: 2.0
-    yaw_timeout_sec: 5.0
-    xy_timeout_sec: 5.0
-    brake_duration_sec: 0.1
-    brake_frequency_hz: 20.0
+    yaw_timeout_sec: 10.0
+    xy_timeout_sec: 10.0
+    brake_duration_sec: 0.3
+    brake_frequency_hz: 50.0
+    enable_debug_topics: true
+    debug_topic_prefix: /move_to_pose/debug
 
     yaw_tolerance_deg: 1.0
     position_tolerance: 0.015
 
     max_linear_speed: 0.8
-    max_angular_speed: 0.8
-    min_linear_speed: 0.18
-    min_angular_speed: 0.18
+    max_angular_speed: 1.5
+    min_linear_speed: 0.15
+    min_angular_speed: 0.2
     integral_limit: 0.5
 
     yaw_pid:
-      kp: 1.2
-      ki: 0.0
+      kp: 1.5
+      ki: 0.2
       kd: 0.05
+    xy_yaw_pid:
+      kp: 0.6
+      ki: 0.0
+      kd: 0.0
     x_pid:
       kp: 0.8
-      ki: 0.0
-      kd: 0.0
+      ki: 0.01
+      kd: 0.1
     y_pid:
       kp: 0.8
-      ki: 0.0
-      kd: 0.0
+      ki: 0.01
+      kd: 0.1
