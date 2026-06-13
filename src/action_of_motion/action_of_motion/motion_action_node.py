@@ -1,6 +1,8 @@
 import math
+import os
 import time
 from dataclasses import dataclass
+from datetime import datetime
 
 import rclpy
 from action_of_motion_interfaces.action import MoveToPose
@@ -118,6 +120,8 @@ class MotionActionNode(Node):
         self._declare_parameters()
         self._load_parameters()
         self.debug_publishers = {}
+        self.debug_samples = []
+        self.debug_record_start_time = None
 
         self.velocity_pub = self.create_publisher(
             Float32MultiArray,
@@ -158,6 +162,8 @@ class MotionActionNode(Node):
         self.declare_parameter('brake_frequency_hz', 50.0)
         self.declare_parameter('enable_debug_topics', True)
         self.declare_parameter('debug_topic_prefix', '/move_to_pose/debug')
+        self.declare_parameter('enable_debug_plot_files', True)
+        self.declare_parameter('debug_output_dir', 'output/pid_debug')
         self.declare_parameter('yaw_tolerance_deg', 1.0)
         self.declare_parameter('position_tolerance', 0.03)
         self.declare_parameter('max_linear_speed', 0.25)
@@ -198,6 +204,10 @@ class MotionActionNode(Node):
             'enable_debug_topics').value)
         self.debug_topic_prefix = self.get_parameter(
             'debug_topic_prefix').value.rstrip('/')
+        self.enable_debug_plot_files = bool(self.get_parameter(
+            'enable_debug_plot_files').value)
+        self.debug_output_dir = self.get_parameter(
+            'debug_output_dir').value
         self.yaw_tolerance_rad = math.radians(float(self.get_parameter(
             'yaw_tolerance_deg').value))
         self.position_tolerance = float(self.get_parameter(
@@ -245,6 +255,7 @@ class MotionActionNode(Node):
     def _execute_callback(self, goal_handle):
         goal = goal_handle.request
         result = MoveToPose.Result()
+        self._start_debug_recording()
 
         yaw_pid = self._make_pid('yaw_pid')
         xy_yaw_pid = self._make_pid('xy_yaw_pid')
@@ -257,13 +268,13 @@ class MotionActionNode(Node):
         if wait_status == 'canceled':
             result.success = False
             result.message = 'Goal canceled while waiting for relocation pose'
-            return result
+            return self._finish_result(goal, result)
         if wait_status != 'ready':
             result.success = False
             result.message = 'Timed out waiting for relocation pose'
             goal_handle.abort()
             self._brake()
-            return result
+            return self._finish_result(goal, result)
 
         yaw_start_time = time.monotonic()
         last_time = yaw_start_time
@@ -273,7 +284,7 @@ class MotionActionNode(Node):
                 result.success = False
                 result.message = 'Goal canceled during yaw phase'
                 self._brake()
-                return result
+                return self._finish_result(goal, result)
 
             now = time.monotonic()
             dt = now - last_time
@@ -290,7 +301,7 @@ class MotionActionNode(Node):
                 result.message = 'Yaw phase timed out'
                 goal_handle.abort()
                 self._brake()
-                return result
+                return self._finish_result(goal, result)
 
             cmd_wz = yaw_pid.update(yaw_error, dt)
             cmd_wz = apply_min_output(cmd_wz, self.min_angular_speed)
@@ -326,7 +337,7 @@ class MotionActionNode(Node):
                 result.success = False
                 result.message = 'Goal canceled during xy phase'
                 self._brake()
-                return result
+                return self._finish_result(goal, result)
 
             now = time.monotonic()
             dt = now - last_time
@@ -342,14 +353,14 @@ class MotionActionNode(Node):
                 result.message = 'Goal reached'
                 goal_handle.succeed()
                 self._brake()
-                return result
+                return self._finish_result(goal, result)
 
             if now - xy_start_time > self.xy_timeout_sec:
                 result.success = False
                 result.message = 'XY phase timed out'
                 goal_handle.abort()
                 self._brake()
-                return result
+                return self._finish_result(goal, result)
 
             error_x_body, error_y_body = map_error_to_body(
                 dx_map,
@@ -396,7 +407,7 @@ class MotionActionNode(Node):
         result.message = 'ROS shutdown during goal execution'
         goal_handle.abort()
         self._brake()
-        return result
+        return self._finish_result(goal, result)
 
     def _wait_for_pose(self, goal_handle, goal, period):
         start_time = time.monotonic()
@@ -505,9 +516,6 @@ class MotionActionNode(Node):
         cmd_vy,
         cmd_wz,
     ):
-        if not self.enable_debug_topics:
-            return
-
         phase_ids = {
             PHASE_WAITING_FOR_POSE: 0.0,
             PHASE_YAW: 1.0,
@@ -530,10 +538,107 @@ class MotionActionNode(Node):
             'cmd_wz': cmd_wz,
             'cmd_linear_speed': math.hypot(cmd_vx, cmd_vy),
         }
+        self._record_debug_sample(values)
+        if not self.enable_debug_topics:
+            return
+
         for name, value in values.items():
             msg = Float64()
             msg.data = float(value)
             self.debug_publishers[name].publish(msg)
+
+    def _start_debug_recording(self):
+        self.debug_samples = []
+        self.debug_record_start_time = time.monotonic()
+
+    def _record_debug_sample(self, values):
+        if not self.enable_debug_plot_files:
+            return
+        if self.debug_record_start_time is None:
+            return
+
+        sample = {'time_sec': time.monotonic() - self.debug_record_start_time}
+        sample.update(values)
+        self.debug_samples.append(sample)
+
+    def _finish_result(self, goal, result):
+        self._save_debug_plot(goal, result)
+        return result
+
+    def _save_debug_plot(self, goal, result):
+        if not self.enable_debug_plot_files or len(self.debug_samples) < 2:
+            return
+
+        try:
+            import matplotlib
+            matplotlib.use('Agg')
+            import matplotlib.pyplot as plt
+        except ImportError as exc:
+            self.get_logger().warning(
+                'Cannot save PID debug plot because matplotlib is missing: '
+                f'{exc}. Install python3-matplotlib.'
+            )
+            return
+
+        os.makedirs(self.debug_output_dir, exist_ok=True)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        status = 'success' if result.success else 'failed'
+        filename = (
+            f'move_to_pose_{timestamp}_{status}_'
+            f'x{goal.x:.2f}_y{goal.y:.2f}_yaw{goal.yaw_deg:.1f}.png'
+        )
+        filepath = os.path.join(self.debug_output_dir, filename)
+
+        times = self._debug_series('time_sec')
+        fig, axes = plt.subplots(4, 1, figsize=(12, 12), sharex=True)
+        fig.suptitle(
+            'MoveToPose PID Debug\n'
+            f'target=({goal.x:.3f}, {goal.y:.3f}, {goal.yaw_deg:.3f}deg), '
+            f'result={result.message}'
+        )
+
+        axes[0].plot(times, self._debug_series('distance_error'),
+                     label='distance_error[m]')
+        axes[0].plot(times, self._debug_series('yaw_error_deg'),
+                     label='yaw_error[deg]')
+        axes[0].set_ylabel('error')
+        axes[0].legend(loc='best')
+        axes[0].grid(True)
+
+        axes[1].plot(times, self._debug_series('error_x_body'),
+                     label='error_x_body[m]')
+        axes[1].plot(times, self._debug_series('error_y_body'),
+                     label='error_y_body[m]')
+        axes[1].set_ylabel('body error')
+        axes[1].legend(loc='best')
+        axes[1].grid(True)
+
+        axes[2].plot(times, self._debug_series('cmd_vx'),
+                     label='cmd_vx')
+        axes[2].plot(times, self._debug_series('cmd_vy'),
+                     label='cmd_vy')
+        axes[2].plot(times, self._debug_series('cmd_linear_speed'),
+                     label='cmd_linear_speed')
+        axes[2].set_ylabel('linear cmd')
+        axes[2].legend(loc='best')
+        axes[2].grid(True)
+
+        axes[3].plot(times, self._debug_series('cmd_wz'),
+                     label='cmd_wz')
+        axes[3].plot(times, self._debug_series('phase_id'),
+                     label='phase_id')
+        axes[3].set_ylabel('angular/phase')
+        axes[3].set_xlabel('time [s]')
+        axes[3].legend(loc='best')
+        axes[3].grid(True)
+
+        fig.tight_layout()
+        fig.savefig(filepath, dpi=140)
+        plt.close(fig)
+        self.get_logger().info(f'Saved PID debug plot: {filepath}')
+
+    def _debug_series(self, name):
+        return [sample[name] for sample in self.debug_samples]
 
     def _distance_error(self, goal, pose):
         return math.hypot(goal.x - pose.x, goal.y - pose.y)

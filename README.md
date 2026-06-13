@@ -42,8 +42,14 @@ ros2 launch action_of_motion motion_action.launch.py \
 ./src/action_of_motion/scripts/send_move_goal.sh 1.0 0.5 90.0
 ```
 
-打开 PID 调试曲线：
+查看最近生成的 PID 调试图：
 
 ```bash
 ./src/action_of_motion/scripts/plot_pid_debug.sh
+```
+
+debug 模式下每次 action 结束会自动生成 matplotlib 曲线图：
+
+```bash
+ls output/pid_debug
 ```

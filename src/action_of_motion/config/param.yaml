@@ -10,6 +10,8 @@ motion_action_node:
     brake_frequency_hz: 50.0
     enable_debug_topics: true
     debug_topic_prefix: /move_to_pose/debug
+    enable_debug_plot_files: true
+    debug_output_dir: output/pid_debug
 
     yaw_tolerance_deg: 1.0
     position_tolerance: 0.015
