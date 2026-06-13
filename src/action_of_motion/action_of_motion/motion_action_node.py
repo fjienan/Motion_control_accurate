@@ -285,6 +285,7 @@ class MotionActionNode(Node):
             )
             time.sleep(period)
 
+        yaw_pid.reset()
         x_pid.reset()
         y_pid.reset()
         xy_start_time = time.monotonic()
@@ -334,8 +335,15 @@ class MotionActionNode(Node):
                 cmd_vy,
                 self.max_linear_speed,
             )
+            cmd_wz = yaw_pid.update(yaw_error, dt)
+            cmd_wz = apply_min_output(cmd_wz, self.min_angular_speed)
+            cmd_wz = clamp(
+                cmd_wz,
+                -self.max_angular_speed,
+                self.max_angular_speed,
+            )
 
-            self._publish_velocity(cmd_vx, cmd_vy, 0.0)
+            self._publish_velocity(cmd_vx, cmd_vy, cmd_wz)
             self._publish_feedback(
                 goal_handle,
                 goal,
@@ -345,7 +353,7 @@ class MotionActionNode(Node):
                 distance_error,
                 cmd_vx,
                 cmd_vy,
-                0.0,
+                cmd_wz,
             )
             time.sleep(period)
 
