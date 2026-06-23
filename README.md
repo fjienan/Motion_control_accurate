@@ -9,6 +9,19 @@
 (`geometry_msgs/PoseStamped`)，并发布 `std_msgs/Float32MultiArray` 到
 `/t0x0101_pid`，数组顺序为 `[vx_body, vy_body, wz]`。
 
+`pose_adjust_mode` 控制位姿微调方式：
+
+- `simultaneous`：默认模式，直接边平移边旋转修正。使用独立的
+  `pose_x_pid`、`pose_y_pid`、`pose_yaw_pid`，以及
+  `pose_timeout_sec`、`pose_max_linear_speed`、
+  `pose_min_linear_speed`、`pose_max_yaw_angular_speed`、
+  `pose_min_yaw_angular_speed`。
+- `staged`：分步模式，先原地旋转到目标 yaw，再平移并小幅修正 yaw。
+  使用原有 `yaw_pid`、`x_pid`、`y_pid`、`xy_yaw_pid` 参数。
+
+`simultaneous` 模式下，位置误差进入 `position_tolerance` 且 yaw 误差进入
+`yaw_tolerance_deg` 后 action 才会返回成功。
+
 构建：
 
 ```bash

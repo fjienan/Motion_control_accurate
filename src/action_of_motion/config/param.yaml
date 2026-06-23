@@ -1,27 +1,39 @@
 motion_action_node:
   ros__parameters:
+    # Topics and loop timing
     relocation_topic: /odin1/relocation
     velocity_topic: /t0x0101_pid
     control_frequency_hz: 20.0
-    initial_pose_timeout_sec: 2.0
+
+    # Mode: simultaneous or staged
+    pose_adjust_mode: simultaneous
+
+    # Timeouts
+    initial_pose_timeout_sec: 0.5
     yaw_timeout_sec: 10.0
     xy_timeout_sec: 10.0
+
+    pose_timeout_sec: 10.0
+
+    # Brake behavior
     brake_duration_sec: 0.3
     brake_frequency_hz: 50.0
-    enable_debug_plot_files: true
-    debug_output_dir: output/pid_debug
 
+    # Goal tolerances
     yaw_tolerance_deg: 1.0
     position_tolerance: 0.015
+    # Shared PID integral clamp
+    integral_limit: 0.5
 
+    # Staged mode velocity limits
     max_linear_speed: 1.5
     max_yaw_angular_speed: 1.5
     max_xy_yaw_angular_speed: 0.4
     min_linear_speed: 0.15
     min_yaw_angular_speed: 0.2
     min_xy_yaw_angular_speed: 0.0
-    integral_limit: 0.5
 
+    # Staged mode PID
     yaw_pid:
       kp: 1.5
       ki: 0.2
@@ -38,3 +50,27 @@ motion_action_node:
       kp: 5.0
       ki: 0.01
       kd: 0.1
+
+    # Simultaneous pose mode velocity limits
+    pose_max_linear_speed: 1.5
+    pose_max_yaw_angular_speed: 0.4
+    pose_min_linear_speed: 0.15
+    pose_min_yaw_angular_speed: 0.0
+
+    # Simultaneous pose mode PID
+    pose_x_pid:
+      kp: 5.0
+      ki: 0.01
+      kd: 0.1
+    pose_y_pid:
+      kp: 5.0
+      ki: 0.01
+      kd: 0.1
+    pose_yaw_pid:
+      kp: 1.0
+      ki: 0.0
+      kd: 0.0
+
+    # Debug plot output
+    enable_debug_plot_files: true
+    debug_output_dir: output/pid_debug

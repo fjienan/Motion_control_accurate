@@ -16,8 +16,11 @@ from std_msgs.msg import Float32MultiArray
 
 ACTION_NAME = 'move_to_pose'
 PHASE_WAITING_FOR_POSE = 'waiting_for_pose'
+PHASE_POSE = 'pose'
 PHASE_YAW = 'yaw'
 PHASE_XY = 'xy'
+POSE_ADJUST_MODE_SIMULTANEOUS = 'simultaneous'
+POSE_ADJUST_MODE_STAGED = 'staged'
 
 
 @dataclass
@@ -152,7 +155,10 @@ class MotionActionNode(Node):
         self.declare_parameter('relocation_topic', '/odin1/relocation')
         self.declare_parameter('velocity_topic', '/t0x0101_pid')
         self.declare_parameter('control_frequency_hz', 50.0)
+        self.declare_parameter('pose_adjust_mode',
+                               POSE_ADJUST_MODE_SIMULTANEOUS)
         self.declare_parameter('initial_pose_timeout_sec', 2.0)
+        self.declare_parameter('pose_timeout_sec', 10.0)
         self.declare_parameter('yaw_timeout_sec', 5.0)
         self.declare_parameter('xy_timeout_sec', 5.0)
         self.declare_parameter('brake_duration_sec', 0.3)
@@ -161,6 +167,10 @@ class MotionActionNode(Node):
         self.declare_parameter('debug_output_dir', 'output/pid_debug')
         self.declare_parameter('yaw_tolerance_deg', 1.0)
         self.declare_parameter('position_tolerance', 0.03)
+        self.declare_parameter('pose_max_linear_speed', 0.25)
+        self.declare_parameter('pose_max_yaw_angular_speed', 0.3)
+        self.declare_parameter('pose_min_linear_speed', 0.2)
+        self.declare_parameter('pose_min_yaw_angular_speed', 0.0)
         self.declare_parameter('max_linear_speed', 0.25)
         self.declare_parameter('max_yaw_angular_speed', 0.5)
         self.declare_parameter('max_xy_yaw_angular_speed', 0.3)
@@ -171,6 +181,15 @@ class MotionActionNode(Node):
         self.declare_parameter('yaw_pid.kp', 1.2)
         self.declare_parameter('yaw_pid.ki', 0.0)
         self.declare_parameter('yaw_pid.kd', 0.05)
+        self.declare_parameter('pose_yaw_pid.kp', 0.6)
+        self.declare_parameter('pose_yaw_pid.ki', 0.0)
+        self.declare_parameter('pose_yaw_pid.kd', 0.0)
+        self.declare_parameter('pose_x_pid.kp', 0.8)
+        self.declare_parameter('pose_x_pid.ki', 0.0)
+        self.declare_parameter('pose_x_pid.kd', 0.02)
+        self.declare_parameter('pose_y_pid.kp', 0.8)
+        self.declare_parameter('pose_y_pid.ki', 0.0)
+        self.declare_parameter('pose_y_pid.kd', 0.02)
         self.declare_parameter('xy_yaw_pid.kp', 0.6)
         self.declare_parameter('xy_yaw_pid.ki', 0.0)
         self.declare_parameter('xy_yaw_pid.kd', 0.0)
@@ -187,8 +206,22 @@ class MotionActionNode(Node):
         self.velocity_topic = self.get_parameter('velocity_topic').value
         self.control_frequency_hz = float(self.get_parameter(
             'control_frequency_hz').value)
+        self.pose_adjust_mode = self.get_parameter(
+            'pose_adjust_mode').value
+        if self.pose_adjust_mode not in (
+            POSE_ADJUST_MODE_SIMULTANEOUS,
+            POSE_ADJUST_MODE_STAGED,
+        ):
+            self.get_logger().warning(
+                'Invalid pose_adjust_mode '
+                f'"{self.pose_adjust_mode}"; falling back to '
+                f'"{POSE_ADJUST_MODE_SIMULTANEOUS}"'
+            )
+            self.pose_adjust_mode = POSE_ADJUST_MODE_SIMULTANEOUS
         self.initial_pose_timeout_sec = float(self.get_parameter(
             'initial_pose_timeout_sec').value)
+        self.pose_timeout_sec = float(self.get_parameter(
+            'pose_timeout_sec').value)
         self.yaw_timeout_sec = float(self.get_parameter(
             'yaw_timeout_sec').value)
         self.xy_timeout_sec = float(self.get_parameter(
@@ -205,6 +238,14 @@ class MotionActionNode(Node):
             'yaw_tolerance_deg').value))
         self.position_tolerance = float(self.get_parameter(
             'position_tolerance').value)
+        self.pose_max_linear_speed = float(self.get_parameter(
+            'pose_max_linear_speed').value)
+        self.pose_max_yaw_angular_speed = float(self.get_parameter(
+            'pose_max_yaw_angular_speed').value)
+        self.pose_min_linear_speed = float(self.get_parameter(
+            'pose_min_linear_speed').value)
+        self.pose_min_yaw_angular_speed = float(self.get_parameter(
+            'pose_min_yaw_angular_speed').value)
         self.max_linear_speed = float(self.get_parameter(
             'max_linear_speed').value)
         self.max_yaw_angular_speed = float(self.get_parameter(
@@ -254,10 +295,6 @@ class MotionActionNode(Node):
         result = MoveToPose.Result()
         self._start_debug_recording()
 
-        yaw_pid = self._make_pid('yaw_pid')
-        xy_yaw_pid = self._make_pid('xy_yaw_pid')
-        x_pid = self._make_pid('x_pid')
-        y_pid = self._make_pid('y_pid')
         target_yaw_rad = math.radians(goal.yaw_deg)
         period = 1.0 / max(self.control_frequency_hz, 1.0)
 
@@ -273,6 +310,34 @@ class MotionActionNode(Node):
             self._brake()
             return self._finish_result(goal, result)
 
+        if self.pose_adjust_mode == POSE_ADJUST_MODE_STAGED:
+            return self._execute_staged(
+                goal_handle,
+                goal,
+                result,
+                target_yaw_rad,
+                period,
+            )
+        return self._execute_simultaneous(
+            goal_handle,
+            goal,
+            result,
+            target_yaw_rad,
+            period,
+        )
+
+    def _execute_staged(
+        self,
+        goal_handle,
+        goal,
+        result,
+        target_yaw_rad,
+        period,
+    ):
+        yaw_pid = self._make_pid('yaw_pid')
+        xy_yaw_pid = self._make_pid('xy_yaw_pid')
+        x_pid = self._make_pid('x_pid')
+        y_pid = self._make_pid('y_pid')
         yaw_start_time = time.monotonic()
         last_time = yaw_start_time
         while rclpy.ok():
@@ -409,6 +474,104 @@ class MotionActionNode(Node):
         self._brake()
         return self._finish_result(goal, result)
 
+    def _execute_simultaneous(
+        self,
+        goal_handle,
+        goal,
+        result,
+        target_yaw_rad,
+        period,
+    ):
+        pose_yaw_pid = self._make_pid('pose_yaw_pid')
+        pose_x_pid = self._make_pid('pose_x_pid')
+        pose_y_pid = self._make_pid('pose_y_pid')
+        pose_start_time = time.monotonic()
+        last_time = pose_start_time
+
+        while rclpy.ok():
+            if goal_handle.is_cancel_requested:
+                goal_handle.canceled()
+                result.success = False
+                result.message = 'Goal canceled during pose phase'
+                self._brake()
+                return self._finish_result(goal, result)
+
+            now = time.monotonic()
+            dt = now - last_time
+            last_time = now
+            pose = self.latest_pose
+            dx_map = goal.x - pose.x
+            dy_map = goal.y - pose.y
+            distance_error = math.hypot(dx_map, dy_map)
+            yaw_error = normalize_angle(target_yaw_rad - pose.yaw_rad)
+
+            if (
+                distance_error <= self.position_tolerance
+                and abs(yaw_error) <= self.yaw_tolerance_rad
+            ):
+                result.success = True
+                result.message = 'Goal reached'
+                goal_handle.succeed()
+                self._brake()
+                return self._finish_result(goal, result)
+
+            if now - pose_start_time > self.pose_timeout_sec:
+                result.success = False
+                result.message = 'Pose phase timed out'
+                goal_handle.abort()
+                self._brake()
+                return self._finish_result(goal, result)
+
+            error_x_body, error_y_body = map_error_to_body(
+                dx_map,
+                dy_map,
+                pose.yaw_rad,
+            )
+            cmd_vx = pose_x_pid.update(error_x_body, dt)
+            cmd_vy = pose_y_pid.update(error_y_body, dt)
+            cmd_vx, cmd_vy = apply_min_vector_output(
+                cmd_vx,
+                cmd_vy,
+                self.pose_min_linear_speed,
+            )
+            cmd_vx, cmd_vy = limit_vector(
+                cmd_vx,
+                cmd_vy,
+                self.pose_max_linear_speed,
+            )
+            cmd_wz = pose_yaw_pid.update(yaw_error, dt)
+            cmd_wz = apply_min_output(
+                cmd_wz,
+                self.pose_min_yaw_angular_speed,
+            )
+            cmd_wz = clamp(
+                cmd_wz,
+                -self.pose_max_yaw_angular_speed,
+                self.pose_max_yaw_angular_speed,
+            )
+
+            self._publish_velocity(cmd_vx, cmd_vy, cmd_wz)
+            self._publish_feedback(
+                goal_handle,
+                goal,
+                pose,
+                PHASE_POSE,
+                yaw_error,
+                distance_error,
+                error_x_body,
+                error_y_body,
+                cmd_vx,
+                cmd_vy,
+                cmd_wz,
+            )
+            time.sleep(period)
+
+        result.success = False
+        result.message = 'ROS shutdown during goal execution'
+        goal_handle.abort()
+        self._brake()
+        return self._finish_result(goal, result)
+
     def _wait_for_pose(self, goal_handle, goal, period):
         start_time = time.monotonic()
         while rclpy.ok() and self.latest_pose is None:
@@ -494,6 +657,7 @@ class MotionActionNode(Node):
             PHASE_WAITING_FOR_POSE: 0.0,
             PHASE_YAW: 1.0,
             PHASE_XY: 2.0,
+            PHASE_POSE: 3.0,
         }
         values = {
             'phase_id': phase_ids.get(phase, -1.0),
