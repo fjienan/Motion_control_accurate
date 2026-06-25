@@ -105,6 +105,14 @@ def map_error_to_body(dx_map, dy_map, yaw_rad):
     return x_body, y_body
 
 
+def map_velocity_to_body(vx_map, vy_map, yaw_rad):
+    cos_yaw = math.cos(yaw_rad)
+    sin_yaw = math.sin(yaw_rad)
+    vx_body = cos_yaw * vx_map + sin_yaw * vy_map
+    vy_body = -sin_yaw * vx_map + cos_yaw * vy_map
+    return vx_body, vy_body
+
+
 def limit_vector(x_value, y_value, max_norm):
     max_norm = abs(max_norm)
     norm = math.hypot(x_value, y_value)
@@ -527,18 +535,8 @@ class MotionActionNode(Node):
                 dy_map,
                 pose.yaw_rad,
             )
-            cmd_vx = pose_x_pid.update(error_x_body, dt)
-            cmd_vy = pose_y_pid.update(error_y_body, dt)
-            cmd_vx, cmd_vy = apply_min_vector_output(
-                cmd_vx,
-                cmd_vy,
-                self.pose_min_linear_speed,
-            )
-            cmd_vx, cmd_vy = limit_vector(
-                cmd_vx,
-                cmd_vy,
-                self.pose_max_linear_speed,
-            )
+            cmd_vx_map = pose_x_pid.update(dx_map, dt)
+            cmd_vy_map = pose_y_pid.update(dy_map, dt)
             cmd_wz = pose_yaw_pid.update(yaw_error, dt)
             cmd_wz = apply_min_output(
                 cmd_wz,
@@ -548,6 +546,22 @@ class MotionActionNode(Node):
                 cmd_wz,
                 -self.pose_max_yaw_angular_speed,
                 self.pose_max_yaw_angular_speed,
+            )
+            compensated_yaw = pose.yaw_rad + cmd_wz * dt * 0.5
+            cmd_vx, cmd_vy = map_velocity_to_body(
+                cmd_vx_map,
+                cmd_vy_map,
+                compensated_yaw,
+            )
+            cmd_vx, cmd_vy = apply_min_vector_output(
+                cmd_vx,
+                cmd_vy,
+                self.pose_min_linear_speed,
+            )
+            cmd_vx, cmd_vy = limit_vector(
+                cmd_vx,
+                cmd_vy,
+                self.pose_max_linear_speed,
             )
 
             self._publish_velocity(cmd_vx, cmd_vy, cmd_wz)
