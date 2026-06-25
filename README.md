@@ -5,22 +5,20 @@
 ## action_of_motion
 
 微调流程通过 `/move_to_pose` action 启动，目标输入为 map 坐标系下的
-`x, y, yaw_deg`。节点订阅 `/odin1/relocation`
+`x, y, yaw_deg`，以及 PID 档位 `pid_profile`。节点订阅 `/odin1/relocation`
 (`geometry_msgs/PoseStamped`)，并发布 `std_msgs/Float32MultiArray` 到
 `/t0x0101_pid`，数组顺序为 `[vx_body, vy_body, wz]`。
 
-`pose_adjust_mode` 控制位姿微调方式：
+节点只保留 simultaneous 微调方式：边平移边旋转修正。Action goal 中的
+`pid_profile` 用来选择两套独立 PID 参数：
 
-- `simultaneous`：默认模式，直接边平移边旋转修正。使用独立的
-  `pose_x_pid`、`pose_y_pid`、`pose_yaw_pid`，以及
-  `pose_timeout_sec`、`pose_max_linear_speed`、
-  `pose_min_linear_speed`、`pose_max_yaw_angular_speed`、
-  `pose_min_yaw_angular_speed`。
-- `staged`：分步模式，先原地旋转到目标 yaw，再平移并小幅修正 yaw。
-  使用原有 `yaw_pid`、`x_pid`、`y_pid`、`xy_yaw_pid` 参数。
+- `0` / `slow`：缓慢型，`slow_profile.max_linear_speed` 默认为 `0.8`。
+- `1` / `fast`：快速型，`fast_profile.max_linear_speed` 默认为 `2.0`。
 
-`simultaneous` 模式下，位置误差进入 `position_tolerance` 且 yaw 误差进入
-`yaw_tolerance_deg` 后 action 才会返回成功。
+每套 profile 都有独立的 `along_pid`、`cross_pid`、`yaw_pid`，以及独立的
+线速度和角速度限制。控制器会按 action 开始时的当前位置到目标点建立 map
+坐标系直线路径，分别控制沿线路径误差和横向偏差；位置误差进入
+`position_tolerance` 且 yaw 误差进入 `yaw_tolerance_deg` 后 action 才会返回成功。
 
 构建：
 
@@ -52,8 +50,46 @@ ros2 launch action_of_motion motion_action.launch.py \
 发送调试 goal：
 
 ```bash
-./src/action_of_motion/scripts/send_move_goal.sh 1.0 0.5 90.0
+./src/action_of_motion/scripts/send_move_goal.sh 1.0 0.5 90.0 slow
+./src/action_of_motion/scripts/send_move_goal.sh 1.0 0.5 90.0 fast
 ```
+
+直接使用 `ros2 action send_goal`：
+
+```bash
+ros2 action send_goal /move_to_pose action_of_motion_interfaces/action/MoveToPose \
+  "{x: 1.0, y: 0.5, yaw_deg: 90.0, pid_profile: 0}" --feedback
+```
+
+低延迟调用方式：
+
+`send_move_goal.sh` 和 `ros2 action send_goal` 适合手动调试，但它们每次都会
+启动一个新的 ROS2 CLI 进程并重新做 action discovery，不适合作为低延迟业务调用。
+在其他常驻 Python 程序里，推荐复用同一个 `MoveToPoseClient` 实例：
+
+```python
+import rclpy
+from rclpy.node import Node
+
+from action_of_motion.move_to_pose_client import MoveToPoseClient
+
+
+rclpy.init()
+node = Node('move_to_pose_user')
+client = MoveToPoseClient(node)
+client.wait_for_server()
+
+result1 = client.send_goal(1.0, 0.5, 90.0, 'slow')
+result2 = client.send_goal(2.0, 0.0, 0.0, 'fast')
+
+node.destroy_node()
+rclpy.shutdown()
+```
+
+同一个 `client` 可以多次调用 `send_goal()`，不需要每次重新创建 client 或重新等待
+server。如果调用方已经有自己的 ROS2 node，就直接把已有 node 传给
+`MoveToPoseClient`。如果调用方是 C++ 程序，也建议使用常驻
+`rclcpp_action::Client`，不要从程序里反复拉起 shell 命令。
 
 查看最近生成的 PID 调试图：
 
@@ -61,7 +97,8 @@ ros2 launch action_of_motion motion_action.launch.py \
 ./src/action_of_motion/scripts/plot_pid_debug.sh
 ```
 
-debug 模式下每次 action 结束会自动生成 matplotlib 曲线图：
+debug 模式下每次 action 结束会自动生成 matplotlib 曲线图，文件名和标题里会包含
+`slow` 或 `fast`，便于区分是哪套 PID 参数：
 
 ```bash
 ls output/pid_debug
