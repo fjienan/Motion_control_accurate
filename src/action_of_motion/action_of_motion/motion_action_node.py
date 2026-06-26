@@ -138,6 +138,15 @@ def limit_vector(x_value, y_value, max_norm):
     return x_value * scale, y_value * scale
 
 
+def sleep_to_next_tick(next_tick, period):
+    next_tick += period
+    sleep_sec = next_tick - time.monotonic()
+    if sleep_sec > 0.0:
+        time.sleep(sleep_sec)
+        return next_tick
+    return time.monotonic()
+
+
 class MotionActionNode(Node):
     def __init__(self):
         super().__init__('motion_action_node')
@@ -181,6 +190,8 @@ class MotionActionNode(Node):
         self.declare_parameter('relocation_topic', '/odin1/relocation')
         self.declare_parameter('velocity_topic', '/t0x0101_pid')
         self.declare_parameter('control_frequency_hz', 50.0)
+        self.declare_parameter('feedback_frequency_hz', 20.0)
+        self.declare_parameter('lightweight_feedback_frequency_hz', 5.0)
         self.declare_parameter('initial_pose_timeout_sec', 2.0)
         self.declare_parameter('pose_timeout_sec', 10.0)
         self.declare_parameter('brake_duration_sec', 0.3)
@@ -215,6 +226,10 @@ class MotionActionNode(Node):
         self.velocity_topic = self.get_parameter('velocity_topic').value
         self.control_frequency_hz = float(self.get_parameter(
             'control_frequency_hz').value)
+        self.feedback_frequency_hz = float(self.get_parameter(
+            'feedback_frequency_hz').value)
+        self.lightweight_feedback_frequency_hz = float(self.get_parameter(
+            'lightweight_feedback_frequency_hz').value)
         self.initial_pose_timeout_sec = float(self.get_parameter(
             'initial_pose_timeout_sec').value)
         self.pose_timeout_sec = float(self.get_parameter(
@@ -225,6 +240,16 @@ class MotionActionNode(Node):
             'brake_frequency_hz').value)
         self.enable_debug_plot_files = bool(self.get_parameter(
             'enable_debug_plot_files').value)
+        active_feedback_hz = (
+            self.feedback_frequency_hz
+            if self.enable_debug_plot_files
+            else self.lightweight_feedback_frequency_hz
+        )
+        self.feedback_period_sec = (
+            1.0 / active_feedback_hz
+            if active_feedback_hz > 0.0
+            else 0.0
+        )
         self.debug_output_dir = self.get_parameter(
             'debug_output_dir').value
         self.yaw_tolerance_rad = math.radians(float(self.get_parameter(
@@ -364,6 +389,8 @@ class MotionActionNode(Node):
 
         pose_start_time = time.monotonic()
         last_time = pose_start_time
+        next_tick = pose_start_time
+        last_feedback_time = None
 
         while rclpy.ok():
             if goal_handle.is_cancel_requested:
@@ -463,20 +490,26 @@ class MotionActionNode(Node):
             )
 
             self._publish_velocity(cmd_vx, cmd_vy, cmd_wz)
-            self._publish_feedback(
-                goal_handle,
-                goal,
-                pose,
-                PHASE_POSE,
-                yaw_error,
-                distance_error,
-                error_x_body,
-                error_y_body,
-                cmd_vx,
-                cmd_vy,
-                cmd_wz,
-            )
-            time.sleep(period)
+            feedback_now = time.monotonic()
+            if self._should_publish_feedback(
+                feedback_now,
+                last_feedback_time,
+            ):
+                last_feedback_time = feedback_now
+                self._publish_feedback(
+                    goal_handle,
+                    goal,
+                    pose,
+                    PHASE_POSE,
+                    yaw_error,
+                    distance_error,
+                    error_x_body,
+                    error_y_body,
+                    cmd_vx,
+                    cmd_vy,
+                    cmd_wz,
+                )
+            next_tick = sleep_to_next_tick(next_tick, period)
 
         result.success = False
         result.message = 'ROS shutdown during goal execution'
@@ -486,6 +519,8 @@ class MotionActionNode(Node):
 
     def _wait_for_pose(self, goal_handle, goal, period):
         start_time = time.monotonic()
+        next_tick = start_time
+        last_feedback_time = None
         while rclpy.ok() and self.latest_pose is None:
             if goal_handle.is_cancel_requested:
                 goal_handle.canceled()
@@ -493,23 +528,37 @@ class MotionActionNode(Node):
                 return 'canceled'
             if time.monotonic() - start_time > self.initial_pose_timeout_sec:
                 return 'timeout'
-            self._publish_feedback(
-                goal_handle,
-                goal,
-                Pose2D(0.0, 0.0, 0.0),
-                PHASE_WAITING_FOR_POSE,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-            )
-            time.sleep(period)
+            feedback_now = time.monotonic()
+            if self._should_publish_feedback(
+                feedback_now,
+                last_feedback_time,
+            ):
+                last_feedback_time = feedback_now
+                self._publish_feedback(
+                    goal_handle,
+                    goal,
+                    Pose2D(0.0, 0.0, 0.0),
+                    PHASE_WAITING_FOR_POSE,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                )
+            next_tick = sleep_to_next_tick(next_tick, period)
         if self.latest_pose is None:
             return 'timeout'
         return 'ready'
+
+    def _should_publish_feedback(self, now, last_feedback_time):
+        if self.feedback_period_sec <= 0.0:
+            return False
+        return (
+            last_feedback_time is None
+            or now - last_feedback_time >= self.feedback_period_sec
+        )
 
     def _publish_feedback(
         self,
@@ -535,22 +584,24 @@ class MotionActionNode(Node):
         feedback.target_yaw_deg = goal.yaw_deg
         feedback.yaw_error_deg = math.degrees(yaw_error_rad)
         feedback.distance_error = distance_error
-        feedback.cmd_vx = cmd_vx
-        feedback.cmd_vy = cmd_vy
-        feedback.cmd_wz = cmd_wz
+        if self.enable_debug_plot_files:
+            feedback.cmd_vx = cmd_vx
+            feedback.cmd_vy = cmd_vy
+            feedback.cmd_wz = cmd_wz
         goal_handle.publish_feedback(feedback)
-        self._record_debug_values(
-            phase,
-            pose,
-            goal,
-            yaw_error_rad,
-            distance_error,
-            error_x_body,
-            error_y_body,
-            cmd_vx,
-            cmd_vy,
-            cmd_wz,
-        )
+        if self.enable_debug_plot_files:
+            self._record_debug_values(
+                phase,
+                pose,
+                goal,
+                yaw_error_rad,
+                distance_error,
+                error_x_body,
+                error_y_body,
+                cmd_vx,
+                cmd_vy,
+                cmd_wz,
+            )
 
     def _record_debug_values(
         self,
@@ -722,10 +773,11 @@ class MotionActionNode(Node):
     def _brake(self):
         period = 1.0 / max(self.brake_frequency_hz, 1.0)
         end_time = time.monotonic() + max(self.brake_duration_sec, 0.0)
+        next_tick = time.monotonic()
         self._publish_stop()
         while time.monotonic() < end_time:
             self._publish_stop()
-            time.sleep(period)
+            next_tick = sleep_to_next_tick(next_tick, period)
 
 
 def main(args=None):

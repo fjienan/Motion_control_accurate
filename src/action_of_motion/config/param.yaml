@@ -4,6 +4,9 @@ motion_action_node:
     relocation_topic: /odin1/relocation
     velocity_topic: /t0x0101_pid
     control_frequency_hz: 20.0
+    # Full action feedback in debug mode; lightweight feedback otherwise.
+    feedback_frequency_hz: 20.0
+    lightweight_feedback_frequency_hz: 5.0
 
     # Timeouts
     initial_pose_timeout_sec: 0.5
@@ -58,6 +61,6 @@ motion_action_node:
         ki: 0.0
         kd: 0.0
 
-    # Debug plot output
-    enable_debug_plot_files: true
+    # Debug plot output and full feedback mode
+    enable_debug_plot_files: false
     debug_output_dir: output/pid_debug

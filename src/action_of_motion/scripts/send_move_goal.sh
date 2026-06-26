@@ -9,19 +9,20 @@ fi
 
 profile_name="${4:-slow}"
 case "$profile_name" in
-  slow)
+  slow|0)
     pid_profile=0
     ;;
-  fast)
+  fast|1)
     pid_profile=1
     ;;
   *)
     echo "Invalid pid profile: $profile_name"
-    echo "Use slow or fast."
+    echo "Use slow, fast, 0, or 1."
     exit 1
     ;;
 esac
 
-ros2 action send_goal /move_to_pose action_of_motion_interfaces/action/MoveToPose \
-  "{x: $1, y: $2, yaw_deg: $3, pid_profile: $pid_profile}" \
+goal="{x: $1, y: $2, yaw_deg: $3, pid_profile: $pid_profile}"
+echo "Sending goal to /move_to_pose as action_of_motion_interfaces/action/MoveToPose: $goal"
+ros2 action send_goal /move_to_pose action_of_motion_interfaces/action/MoveToPose "$goal" \
   --feedback
