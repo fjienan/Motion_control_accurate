@@ -10,7 +10,7 @@ motion_action_node:
 
     # Timeouts
     initial_pose_timeout_sec: 0.5
-    pose_timeout_sec: 20.0
+    pose_timeout_sec: 10.0
 
     # Brake behavior
     brake_duration_sec: 0.3
@@ -44,8 +44,8 @@ motion_action_node:
 
     # Fast profile, selected by pid_profile=1
     fast_profile:
-      max_linear_speed: 2.0
-      max_yaw_angular_speed: 0.4
+      max_linear_speed: 1.5
+      max_yaw_angular_speed: 2.0
       min_linear_speed: 0.15
       min_yaw_angular_speed: 0.0
       along_pid:
