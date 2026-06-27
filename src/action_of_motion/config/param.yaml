@@ -2,23 +2,23 @@ motion_action_node:
   ros__parameters:
     # Topics and loop timing
     relocation_topic: /odin1/relocation
-    velocity_topic: /t0x0101_pid
-    control_frequency_hz: 120.0
+    velocity_topic: /t0x0111_pid
+    control_frequency_hz: 100.0
     # Full action feedback in debug mode; lightweight feedback otherwise.
     feedback_frequency_hz: 20.0
     lightweight_feedback_frequency_hz: 5.0
 
     # Timeouts
     initial_pose_timeout_sec: 0.5
-    pose_timeout_sec: 10.0
+    pose_timeout_sec: 20.0
 
     # Brake behavior
     brake_duration_sec: 0.3
     brake_frequency_hz: 50.0
 
     # Goal tolerances
-    yaw_tolerance_deg: 1.0
-    position_tolerance: 0.015
+    yaw_tolerance_deg: 2.0
+    position_tolerance: 0.02
 
     # Shared PID integral clamp
     integral_limit: 0.5
@@ -27,7 +27,7 @@ motion_action_node:
     slow_profile:
       max_linear_speed: 0.8
       max_yaw_angular_speed: 0.4
-      min_linear_speed: 0.15
+      min_linear_speed: 0.2
       min_yaw_angular_speed: 0.0
       along_pid:
         kp: 5.0
