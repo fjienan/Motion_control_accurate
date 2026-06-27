@@ -3,7 +3,7 @@ motion_action_node:
     # Topics and loop timing
     relocation_topic: /odin1/relocation
     velocity_topic: /t0x0101_pid
-    control_frequency_hz: 20.0
+    control_frequency_hz: 120.0
     # Full action feedback in debug mode; lightweight feedback otherwise.
     feedback_frequency_hz: 20.0
     lightweight_feedback_frequency_hz: 5.0
