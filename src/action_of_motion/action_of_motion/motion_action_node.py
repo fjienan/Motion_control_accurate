@@ -295,13 +295,31 @@ class MotionActionNode(Node):
                 f'{goal_request.pid_profile}'
             )
             return GoalResponse.REJECT
+        if (
+            not math.isfinite(goal_request.x)
+            or not math.isfinite(goal_request.y)
+            or not math.isfinite(goal_request.yaw_deg)
+            or not math.isfinite(goal_request.max_vel)
+            or goal_request.max_vel < 0.0
+            or not math.isfinite(goal_request.max_wz)
+            or goal_request.max_wz < 0.0
+            or not math.isfinite(goal_request.completion_distance)
+            or goal_request.completion_distance < 0.0
+        ):
+            self.get_logger().warning(
+                'Rejecting goal with invalid pose, max_vel, max_wz, '
+                'or completion_distance'
+            )
+            return GoalResponse.REJECT
 
         self.get_logger().info(
             'Received goal: '
             f'x={goal_request.x:.3f}, '
             f'y={goal_request.y:.3f}, '
             f'yaw_deg={goal_request.yaw_deg:.3f}, '
-            f'pid_profile={self._profile_name(goal_request.pid_profile)}'
+            f'pid_profile={self._profile_name(goal_request.pid_profile)}, '
+            f'max_vel={goal_request.max_vel:.3f}, '
+            f'max_wz={goal_request.max_wz:.3f}'
         )
         self._goal_accepted_time = time.monotonic()
         self.get_logger().info('MoveToPose latency: goal accepted')
@@ -354,6 +372,22 @@ class MotionActionNode(Node):
             return self._finish_result(goal, result)
 
         profile = self._make_profile(goal.pid_profile)
+        effective_max_linear_speed = self._effective_max_linear_speed(
+            goal,
+            profile,
+        )
+        effective_max_yaw_angular_speed = (
+            self._effective_max_yaw_angular_speed(goal, profile)
+        )
+        self.get_logger().info(
+            'MoveToPose speed limit: '
+            f'profile_max_linear={profile.max_linear_speed:.3f}, '
+            f'goal_max_vel={goal.max_vel:.3f}, '
+            f'effective_max_linear={effective_max_linear_speed:.3f}, '
+            f'profile_max_wz={profile.max_yaw_angular_speed:.3f}, '
+            f'goal_max_wz={goal.max_wz:.3f}, '
+            f'effective_max_wz={effective_max_yaw_angular_speed:.3f}'
+        )
         return self._execute_simultaneous(
             goal_handle,
             goal,
@@ -361,7 +395,19 @@ class MotionActionNode(Node):
             target_yaw_rad,
             period,
             profile,
+            effective_max_linear_speed,
+            effective_max_yaw_angular_speed,
         )
+
+    def _effective_max_linear_speed(self, goal, profile):
+        if goal.max_vel > 0.0:
+            return float(goal.max_vel)
+        return profile.max_linear_speed
+
+    def _effective_max_yaw_angular_speed(self, goal, profile):
+        if goal.max_wz > 0.0:
+            return float(goal.max_wz)
+        return profile.max_yaw_angular_speed
 
     def _execute_simultaneous(
         self,
@@ -371,6 +417,8 @@ class MotionActionNode(Node):
         target_yaw_rad,
         period,
         profile,
+        effective_max_linear_speed,
+        effective_max_yaw_angular_speed,
     ):
         start_pose = self.latest_pose
         path_dx = goal.x - start_pose.x
@@ -410,13 +458,20 @@ class MotionActionNode(Node):
             yaw_error = normalize_angle(target_yaw_rad - pose.yaw_rad)
 
             if (
-                distance_error <= self.position_tolerance
-                and abs(yaw_error) <= self.yaw_tolerance_rad
+                self._goal_completion_reached(goal, distance_error, yaw_error)
             ):
                 result.success = True
-                result.message = 'Goal reached'
+                if goal.completion_distance > 0.0:
+                    result.message = (
+                        'Completion distance reached '
+                        f'({distance_error:.3f} <= '
+                        f'{goal.completion_distance:.3f})'
+                    )
+                else:
+                    result.message = 'Goal reached'
                 goal_handle.succeed()
-                self._brake()
+                if not goal.skip_brake_on_success:
+                    self._brake()
                 return self._finish_result(goal, result)
 
             if now - pose_start_time > self.pose_timeout_sec:
@@ -469,8 +524,8 @@ class MotionActionNode(Node):
             )
             cmd_wz = clamp(
                 cmd_wz,
-                -profile.max_yaw_angular_speed,
-                profile.max_yaw_angular_speed,
+                -effective_max_yaw_angular_speed,
+                effective_max_yaw_angular_speed,
             )
             compensated_yaw = pose.yaw_rad + cmd_wz * dt * 0.5
             cmd_vx, cmd_vy = map_velocity_to_body(
@@ -486,7 +541,7 @@ class MotionActionNode(Node):
             cmd_vx, cmd_vy = limit_vector(
                 cmd_vx,
                 cmd_vy,
-                profile.max_linear_speed,
+                effective_max_linear_speed,
             )
 
             self._publish_velocity(cmd_vx, cmd_vy, cmd_wz)
@@ -508,6 +563,8 @@ class MotionActionNode(Node):
                     cmd_vx,
                     cmd_vy,
                     cmd_wz,
+                    effective_max_linear_speed,
+                    effective_max_yaw_angular_speed,
                 )
             next_tick = sleep_to_next_tick(next_tick, period)
 
@@ -516,6 +573,18 @@ class MotionActionNode(Node):
         goal_handle.abort()
         self._brake()
         return self._finish_result(goal, result)
+
+    def _goal_completion_reached(self, goal, distance_error, yaw_error):
+        position_tolerance = (
+            float(goal.completion_distance)
+            if goal.completion_distance > 0.0
+            else self.position_tolerance
+        )
+        if distance_error > position_tolerance:
+            return False
+        if goal.completion_position_only:
+            return True
+        return abs(yaw_error) <= self.yaw_tolerance_rad
 
     def _wait_for_pose(self, goal_handle, goal, period):
         start_time = time.monotonic()
@@ -539,6 +608,8 @@ class MotionActionNode(Node):
                     goal,
                     Pose2D(0.0, 0.0, 0.0),
                     PHASE_WAITING_FOR_POSE,
+                    0.0,
+                    0.0,
                     0.0,
                     0.0,
                     0.0,
@@ -573,6 +644,8 @@ class MotionActionNode(Node):
         cmd_vx,
         cmd_vy,
         cmd_wz,
+        effective_max_linear_speed,
+        effective_max_yaw_angular_speed,
     ):
         feedback = MoveToPose.Feedback()
         feedback.phase = phase
@@ -601,6 +674,8 @@ class MotionActionNode(Node):
                 cmd_vx,
                 cmd_vy,
                 cmd_wz,
+                effective_max_linear_speed,
+                effective_max_yaw_angular_speed,
             )
 
     def _record_debug_values(
@@ -615,6 +690,8 @@ class MotionActionNode(Node):
         cmd_vx,
         cmd_vy,
         cmd_wz,
+        effective_max_linear_speed,
+        effective_max_yaw_angular_speed,
     ):
         phase_ids = {
             PHASE_WAITING_FOR_POSE: 0.0,
@@ -629,6 +706,11 @@ class MotionActionNode(Node):
             'target_x': goal.x,
             'target_y': goal.y,
             'target_yaw_deg': goal.yaw_deg,
+            'goal_max_vel': goal.max_vel,
+            'goal_max_wz': goal.max_wz,
+            'effective_max_linear_speed': effective_max_linear_speed,
+            'effective_max_yaw_angular_speed':
+                effective_max_yaw_angular_speed,
             'yaw_error_deg': math.degrees(yaw_error_rad),
             'distance_error': distance_error,
             'error_x_body': error_x_body,
@@ -657,7 +739,9 @@ class MotionActionNode(Node):
     def _finish_result(self, goal, result):
         self.get_logger().info(
             'MoveToPose latency: result finish, '
-            f'success={result.success}, message="{result.message}"'
+            f'success={result.success}, max_vel={goal.max_vel:.3f}, '
+            f'max_wz={goal.max_wz:.3f}, '
+            f'message="{result.message}"'
         )
         if self.enable_debug_plot_files and len(self.debug_samples) >= 2:
             debug_samples = [sample.copy() for sample in self.debug_samples]
@@ -688,6 +772,14 @@ class MotionActionNode(Node):
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         status = 'success' if result.success else 'failed'
         profile_name = self._profile_name(goal.pid_profile)
+        profile = self._make_profile(goal.pid_profile)
+        effective_max_linear_speed = self._effective_max_linear_speed(
+            goal,
+            profile,
+        )
+        effective_max_yaw_angular_speed = (
+            self._effective_max_yaw_angular_speed(goal, profile)
+        )
         filename = (
             f'move_to_pose_{timestamp}_{status}_'
             f'{profile_name}_'
@@ -712,6 +804,10 @@ class MotionActionNode(Node):
             'MoveToPose PID Debug\n'
             f'target=({goal.x:.3f}, {goal.y:.3f}, {goal.yaw_deg:.3f}deg), '
             f'pid_profile={profile_name}, '
+            f'max_vel={goal.max_vel:.3f}, '
+            f'effective_max_linear={effective_max_linear_speed:.3f}, '
+            f'max_wz={goal.max_wz:.3f}, '
+            f'effective_max_wz={effective_max_yaw_angular_speed:.3f}, '
             f'result={result.message}'
         )
 
@@ -730,11 +826,26 @@ class MotionActionNode(Node):
         axes[2].plot(times, cmd_vx, label='cmd_vx')
         axes[2].plot(times, cmd_vy, label='cmd_vy')
         axes[2].plot(times, cmd_linear_speed, label='cmd_linear_speed')
+        axes[2].axhline(
+            effective_max_linear_speed,
+            linestyle='--',
+            label='effective_max_linear',
+        )
         axes[2].set_ylabel('linear cmd')
         axes[2].legend(loc='best')
         axes[2].grid(True)
 
         axes[3].plot(times, cmd_wz, label='cmd_wz')
+        axes[3].axhline(
+            effective_max_yaw_angular_speed,
+            linestyle='--',
+            label='effective_max_wz',
+        )
+        axes[3].axhline(
+            -effective_max_yaw_angular_speed,
+            linestyle='--',
+            label='-effective_max_wz',
+        )
         axes[3].plot(times, phase_ids, label='phase_id')
         axes[3].set_ylabel('angular/phase')
         axes[3].set_xlabel('time [s]')

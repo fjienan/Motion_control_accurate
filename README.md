@@ -5,7 +5,8 @@
 ## action_of_motion
 
 微调流程通过 `/move_to_pose` action 启动，目标输入为 map 坐标系下的
-`x, y, yaw_deg`，以及 PID 档位 `pid_profile`。节点订阅 `/odin1/relocation`
+`x, y, yaw_deg`，PID 档位 `pid_profile`，以及可选速度覆盖值
+`max_vel` / `max_wz`。节点订阅 `/odin1/relocation`
 (`geometry_msgs/PoseStamped`)，并发布 `std_msgs/Float32MultiArray` 到
 `/t0x0101_pid`，数组顺序为 `[vx_body, vy_body, wz]`。
 
@@ -14,6 +15,12 @@
 
 - `0` / `slow`：缓慢型，`slow_profile.max_linear_speed` 默认为 `0.8`。
 - `1` / `fast`：快速型，`fast_profile.max_linear_speed` 默认为 `2.0`。
+
+`max_vel` 单位为 m/s，默认 `0.0` 表示沿用所选 profile 的原始
+`max_linear_speed`；当 `max_vel > 0.0` 时，仅覆盖本次 goal 的最大线速度，
+`max_wz` 单位为 rad/s，默认 `0.0` 表示沿用所选 profile 的原始
+`max_yaw_angular_speed`；当 `max_wz > 0.0` 时，仅覆盖本次 goal 的最大 yaw
+角速度。
 
 每套 profile 都有独立的 `along_pid`、`cross_pid`、`yaw_pid`，以及独立的
 线速度和角速度限制。控制器会按 action 开始时的当前位置到目标点建立 map
@@ -52,13 +59,14 @@ ros2 launch action_of_motion motion_action.launch.py \
 ```bash
 ./src/action_of_motion/scripts/send_move_goal.sh 1.0 0.5 90.0 slow
 ./src/action_of_motion/scripts/send_move_goal.sh 1.0 0.5 90.0 fast
+./src/action_of_motion/scripts/send_move_goal.sh 1.0 0.5 90.0 fast 0.4 0.8
 ```
 
 直接使用 `ros2 action send_goal`：
 
 ```bash
 ros2 action send_goal /move_to_pose action_of_motion_interfaces/action/MoveToPose \
-  "{x: 1.0, y: 0.5, yaw_deg: 90.0, pid_profile: 0}" --feedback
+  "{x: 1.0, y: 0.5, yaw_deg: 90.0, pid_profile: 0, max_vel: 0.4, max_wz: 0.8}" --feedback
 ```
 
 低延迟调用方式：
@@ -80,7 +88,7 @@ client = MoveToPoseClient(node)
 client.wait_for_server()
 
 result1 = client.send_goal(1.0, 0.5, 90.0, 'slow')
-result2 = client.send_goal(2.0, 0.0, 0.0, 'fast')
+result2 = client.send_goal(2.0, 0.0, 0.0, 'fast', max_vel=0.4, max_wz=0.8)
 
 node.destroy_node()
 rclpy.shutdown()

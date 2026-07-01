@@ -26,15 +26,15 @@ motion_action_node:
     # Slow profile, selected by pid_profile=0
     slow_profile:
       max_linear_speed: 0.8
-      max_yaw_angular_speed: 0.4
+      max_yaw_angular_speed: 0.8
       min_linear_speed: 0.2
       min_yaw_angular_speed: 0.0
       along_pid:
-        kp: 5.0
+        kp: 3.0
         ki: 0.01
         kd: 0.1
       cross_pid:
-        kp: 5.0
+        kp: 3.0
         ki: 0.01
         kd: 0.1
       yaw_pid:
@@ -45,15 +45,15 @@ motion_action_node:
     # Fast profile, selected by pid_profile=1
     fast_profile:
       max_linear_speed: 1.5
-      max_yaw_angular_speed: 2.0
+      max_yaw_angular_speed: 2.5
       min_linear_speed: 0.15
       min_yaw_angular_speed: 0.0
       along_pid:
-        kp: 5.0
+        kp: 3.0
         ki: 0.01
         kd: 0.1
       cross_pid:
-        kp: 5.0
+        kp: 3.0
         ki: 0.01
         kd: 0.1
       yaw_pid:

@@ -4,6 +4,11 @@ float64 x
 float64 y
 float64 yaw_deg
 uint8 pid_profile
+float64 max_vel
+float64 max_wz
+float64 completion_distance
+bool completion_position_only
+bool skip_brake_on_success
 ---
 bool success
 string message

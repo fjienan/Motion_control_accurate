@@ -27,12 +27,16 @@ class MoveToPoseClient:
         pid_profile,
         feedback_callback=None,
         timeout_sec=None,
+        max_vel=0.0,
+        max_wz=0.0,
     ):
         goal_msg = MoveToPose.Goal()
         goal_msg.x = float(x)
         goal_msg.y = float(y)
         goal_msg.yaw_deg = float(yaw_deg)
         goal_msg.pid_profile = self._normalize_pid_profile(pid_profile)
+        goal_msg.max_vel = float(max_vel)
+        goal_msg.max_wz = float(max_wz)
 
         goal_future = self._client.send_goal_async(
             goal_msg,
@@ -53,12 +57,14 @@ class MoveToPoseClient:
         return result_response.result
 
     def send_goal_async(self, x, y, yaw_deg, pid_profile,
-                        feedback_callback=None):
+                        feedback_callback=None, max_vel=0.0, max_wz=0.0):
         goal_msg = MoveToPose.Goal()
         goal_msg.x = float(x)
         goal_msg.y = float(y)
         goal_msg.yaw_deg = float(yaw_deg)
         goal_msg.pid_profile = self._normalize_pid_profile(pid_profile)
+        goal_msg.max_vel = float(max_vel)
+        goal_msg.max_wz = float(max_wz)
         return self._client.send_goal_async(
             goal_msg,
             feedback_callback=feedback_callback,
